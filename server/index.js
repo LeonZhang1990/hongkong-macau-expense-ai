@@ -113,6 +113,26 @@ const upload = multer({
 app.use(cors());
 app.use(express.json());
 
+// ─── HTTP Basic Auth（可选，通过环境变量开启）────────────────
+// 设置 AUTH_USER + AUTH_PASS 即可开启；留空则不启用（适合本机开发）
+const AUTH_USER = process.env.AUTH_USER || '';
+const AUTH_PASS = process.env.AUTH_PASS || '';
+if (AUTH_USER && AUTH_PASS) {
+  console.log(`🔐 Basic Auth enabled for user: ${AUTH_USER}`);
+  app.use((req, res, next) => {
+    const header = req.headers.authorization || '';
+    const [scheme, encoded] = header.split(' ');
+    if (scheme === 'Basic' && encoded) {
+      try {
+        const [u, p] = Buffer.from(encoded, 'base64').toString('utf8').split(':');
+        if (u === AUTH_USER && p === AUTH_PASS) return next();
+      } catch {}
+    }
+    res.set('WWW-Authenticate', 'Basic realm="Reimbursement System"');
+    res.status(401).send('Authentication required');
+  });
+}
+
 // ─── Prompt ───────────────────────────────────────────────
 const JSON_SCHEMA = `
 返回格式为 JSON 数组，每个元素结构如下（一次可返回多条，如一张图含往返票）：

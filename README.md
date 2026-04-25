@@ -52,8 +52,71 @@
 | `OPENAI_API_KEY` | 使用 OpenAI 时填 |
 | `ANTHROPIC_API_KEY` | 使用 Claude 时填 |
 | `LLM_API_KEY` | 通用兜底：匹配不到前三个时使用 |
+| `AUTH_USER` | 登录用户名（留空=不启用鉴权） |
+| `AUTH_PASS` | 登录密码（和 AUTH_USER 同时设置才生效） |
 
 > 注意：Railway 的文件系统不持久化，`config.json` 和 `history.json` 在每次部署时会丢失。想要持久化识别历史，需要接入 Railway Volume 或外部数据库（暂未内置）。
+
+---
+
+## 部署到自己的 Linux 服务器（如腾讯云 Lighthouse）
+
+### 1. 准备环境（Ubuntu/Debian 示例）
+
+```bash
+# 安装 Node 20（用 NodeSource 官方源）
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs git
+
+# 验证
+node -v && npm -v
+```
+
+### 2. 拉代码 + 安装 + 构建
+
+```bash
+cd ~
+git clone https://github.com/LeonZhang1990/hongkong-macau-expense-ai.git
+cd hongkong-macau-expense-ai
+npm install   # 自动 postinstall：装前后端依赖 + 构建前端
+```
+
+### 3. 用 PM2 常驻运行
+
+```bash
+sudo npm install -g pm2
+
+# 启动（带登录鉴权；请自行改密码）
+AUTH_USER=admin AUTH_PASS=请改成你自己的密码 pm2 start "node server/index.js" --name reimbursement
+
+pm2 save
+pm2 startup   # 按照提示再执行一条命令即可实现开机自启
+```
+
+### 4. 放开防火墙端口
+
+- **Lighthouse 控制台** → 你的实例 → **防火墙** → 添加规则：TCP / 3001 / 来源 `0.0.0.0/0`
+- 服务器内部（Ubuntu 若开了 UFW）：`sudo ufw allow 3001/tcp`
+
+### 5. 访问
+
+打开浏览器：`http://<你的公网IP>:3001`
+浏览器会弹出登录框 → 输入你设置的 `AUTH_USER / AUTH_PASS` → 进入系统 → **API 管理** 配置 Key 即可使用。
+
+### 常用运维命令
+
+```bash
+pm2 logs reimbursement       # 看日志
+pm2 restart reimbursement    # 重启
+pm2 stop reimbursement       # 停止
+pm2 list                     # 查看所有服务
+
+# 更新代码到最新版
+cd ~/hongkong-macau-expense-ai
+git pull
+npm install
+pm2 restart reimbursement
+```
 
 ---
 
