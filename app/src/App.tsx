@@ -2,7 +2,7 @@ import React, { useState, useCallback, useRef } from 'react';
 import * as XLSX from 'xlsx';
 
 // ─── Types ────────────────────────────────────────────────
-type ExpenseType = '高铁票' | 'Uber行程' | '滴滴' | '微信乘车码';
+type ExpenseType = '高铁票' | 'Uber行程' | '滴滴' | '微信乘车码' | '船票';
 type ParseStatus = 'idle' | 'parsing' | 'done' | 'error';
 
 interface ParsedItem { date: string; type: ExpenseType; route: string; amount: number; }
@@ -17,8 +17,17 @@ interface PendingFile {
   items: ParsedItem[];
 }
 
+// 大交通 = 高铁票 + 船票；交通费 = Uber + 滴滴 + 微信乘车码
+const BIG_TRANSPORT: ExpenseType[] = ['高铁票', '船票'];
+const isBigTransport = (t: ExpenseType) => BIG_TRANSPORT.includes(t);
+
 interface ExpenseRecord { id: number; date: string; type: ExpenseType; route: string; amount: number; }
-interface DailyGroup { date: string; records: ExpenseRecord[]; nonRailTotal: number; }
+interface DailyGroup {
+  date: string;
+  records: ExpenseRecord[];
+  bigTransportTotal: number;  // 高铁 + 船票
+  commuteTotal: number;       // Uber + 滴滴 + 微信乘车码
+}
 
 // ─── Helpers ──────────────────────────────────────────────
 function sortRecords(list: ExpenseRecord[]): ExpenseRecord[] {
@@ -37,48 +46,50 @@ function groupByDate(records: ExpenseRecord[]): DailyGroup[] {
   }
   return Array.from(map.entries()).map(([date, recs]) => ({
     date, records: recs,
-    nonRailTotal: recs.filter(r => r.type !== '高铁票').reduce((s, r) => s + r.amount, 0),
+    bigTransportTotal: recs.filter(r => isBigTransport(r.type)).reduce((s, r) => s + r.amount, 0),
+    commuteTotal: recs.filter(r => !isBigTransport(r.type)).reduce((s, r) => s + r.amount, 0),
   }));
 }
 
-function exportExcel(records: ExpenseRecord[], groups: DailyGroup[]) {
+function exportExcel(_records: ExpenseRecord[], groups: DailyGroup[]) {
   const wb = XLSX.utils.book_new();
   const rows: (string | number)[][] = [['序号', '日期', '费用类型', '行程', '金额']];
   const merges: XLSX.Range[] = [];
-  const totalRowIndexes: number[] = [];  // 小计行的 0-based 行索引
+  const totalRowIndexes: number[] = [];  // 小计行的 0-based 行索引（用于加粗）
 
   let seq = 1;
   for (const g of groups) {
-    for (const r of g.records) {
-      rows.push([seq++, r.date, r.type, r.route, r.amount]);
+    // 按顺序：先输出大交通（高铁/船票），再输出交通费（Uber/滴滴/微信）
+    const bigs = g.records.filter(r => isBigTransport(r.type));
+    const commutes = g.records.filter(r => !isBigTransport(r.type));
+    for (const r of bigs) rows.push([seq++, r.date, r.type, r.route, r.amount]);
+    for (const r of commutes) rows.push([seq++, r.date, r.type, r.route, r.amount]);
+
+    // 若当天有大交通，加一行"X月X日大交通合计"
+    if (g.bigTransportTotal > 0) {
+      const rowIdx = rows.length;
+      rows.push(['', `${g.date}大交通合计：`, '', '', +g.bigTransportTotal.toFixed(2)]);
+      merges.push({ s: { r: rowIdx, c: 1 }, e: { r: rowIdx, c: 3 } });
+      totalRowIndexes.push(rowIdx);
     }
-    // 小计行：B~D 三列合并，放合计文字；E 列放金额
-    const rowIdx = rows.length;   // 下一行的 0-based 索引
-    rows.push(['', `${g.date}交通费总额(不含高铁)：`, '', '', +g.nonRailTotal.toFixed(2)]);
-    merges.push({ s: { r: rowIdx, c: 1 }, e: { r: rowIdx, c: 3 } });  // B~D
-    totalRowIndexes.push(rowIdx);
+    // 若当天有交通费，加一行"X月X日交通费合计"
+    if (g.commuteTotal > 0) {
+      const rowIdx = rows.length;
+      rows.push(['', `${g.date}交通费合计：`, '', '', +g.commuteTotal.toFixed(2)]);
+      merges.push({ s: { r: rowIdx, c: 1 }, e: { r: rowIdx, c: 3 } });
+      totalRowIndexes.push(rowIdx);
+    }
   }
 
   const ws = XLSX.utils.aoa_to_sheet(rows);
   ws['!cols'] = [{ wch: 6 }, { wch: 10 }, { wch: 12 }, { wch: 60 }, { wch: 12 }];
   ws['!merges'] = merges;
 
-  // 为合计行单元格设置样式（右对齐、加粗）
   for (const r of totalRowIndexes) {
-    const labelAddr = XLSX.utils.encode_cell({ r, c: 1 });  // B 列（合并后）
-    const amountAddr = XLSX.utils.encode_cell({ r, c: 4 }); // E 列金额
-    if (ws[labelAddr]) {
-      ws[labelAddr].s = {
-        alignment: { horizontal: 'right', vertical: 'center' },
-        font: { bold: true },
-      };
-    }
-    if (ws[amountAddr]) {
-      ws[amountAddr].s = {
-        alignment: { horizontal: 'right', vertical: 'center' },
-        font: { bold: true },
-      };
-    }
+    const labelAddr = XLSX.utils.encode_cell({ r, c: 1 });
+    const amountAddr = XLSX.utils.encode_cell({ r, c: 4 });
+    if (ws[labelAddr]) ws[labelAddr].s = { alignment: { horizontal: 'right', vertical: 'center' }, font: { bold: true } };
+    if (ws[amountAddr]) ws[amountAddr].s = { alignment: { horizontal: 'right', vertical: 'center' }, font: { bold: true } };
   }
 
   XLSX.utils.book_append_sheet(wb, ws, '报销明细');
@@ -191,6 +202,7 @@ function HistoryPanel({ onReuse }: { onReuse?: (records: ParsedItem[]) => void }
   const stats = {
     total: list.length,
     rail: list.filter(h => h.hint === '高铁票').length,
+    ship: list.filter(h => h.hint === '船票').length,
     uber: list.filter(h => h.hint === 'Uber行程').length,
     didi: list.filter(h => h.hint === '滴滴').length,
     mtr: list.filter(h => h.hint === '微信乘车码').length,
@@ -220,10 +232,11 @@ function HistoryPanel({ onReuse }: { onReuse?: (records: ParsedItem[]) => void }
           </div>
         </div>
 
-        <div className="grid grid-cols-5 gap-3">
+        <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
           {[
             { label: '总记录', value: stats.total, color: 'text-white' },
             { label: '高铁票', value: stats.rail, color: 'text-[#a9b6ff]' },
+            { label: '船票', value: stats.ship, color: 'text-[#ff9fa9]' },
             { label: 'Uber 行程', value: stats.uber, color: 'text-[#81efba]' },
             { label: '滴滴', value: stats.didi, color: 'text-[#ffcf7b]' },
             { label: '微信乘车码', value: stats.mtr, color: 'text-[#4ad8ff]' },
@@ -240,8 +253,8 @@ function HistoryPanel({ onReuse }: { onReuse?: (records: ParsedItem[]) => void }
       <section className="mt-6 rounded-[28px] border border-white/[0.08] p-6"
         style={{ background: 'rgba(23,28,51,0.92)', boxShadow: '0 20px 60px rgba(0,0,0,0.35)' }}>
         <div className="flex items-center justify-between mb-5">
-          <div className="inline-flex gap-2 bg-white/[0.03] p-1.5 rounded-2xl border border-white/[0.06]">
-            {(['all', '高铁票', 'Uber行程', '滴滴', '微信乘车码'] as const).map(k => (
+          <div className="inline-flex flex-wrap gap-2 bg-white/[0.03] p-1.5 rounded-2xl border border-white/[0.06]">
+            {(['all', '高铁票', '船票', 'Uber行程', '滴滴', '微信乘车码'] as const).map(k => (
               <button key={k} onClick={() => setFilter(k)}
                 className={`border-0 px-4 py-2 rounded-xl font-semibold cursor-pointer text-sm ${
                   filter === k ? 'text-white' : 'bg-transparent text-[#98a1c0] hover:text-white'
@@ -266,6 +279,7 @@ function HistoryPanel({ onReuse }: { onReuse?: (records: ParsedItem[]) => void }
               const isOpen = expanded === h.id;
               const hintColor: Record<ExpenseType, string> = {
                 '高铁票': 'text-[#a9b6ff] bg-[rgba(110,120,255,0.12)] border-[rgba(110,120,255,0.2)]',
+                '船票': 'text-[#ff9fa9] bg-[rgba(255,107,129,0.12)] border-[rgba(255,107,129,0.2)]',
                 'Uber行程': 'text-[#81efba] bg-[rgba(57,217,138,0.12)] border-[rgba(57,217,138,0.2)]',
                 '滴滴': 'text-[#ffcf7b] bg-[rgba(255,182,72,0.12)] border-[rgba(255,182,72,0.2)]',
                 '微信乘车码': 'text-[#4ad8ff] bg-[rgba(74,216,255,0.12)] border-[rgba(74,216,255,0.2)]',
@@ -860,7 +874,7 @@ function ResultCard({ entry, onConfirm, onRemove, onViewSource }: {
               {i === 0 && <label className="block text-[#98a1c0] text-[11px] mb-2">类型</label>}
               <select className="select w-full bg-white/[0.04] text-white rounded-[14px] px-3.5 py-3 text-sm outline-none border border-white/[0.08] focus:border-[rgba(124,77,255,0.72)]"
                 value={it.type} onChange={e => change(i, 'type', e.target.value as ExpenseType)}>
-                <option>高铁票</option><option>Uber行程</option><option>滴滴</option><option>微信乘车码</option>
+                <option>高铁票</option><option>船票</option><option>Uber行程</option><option>滴滴</option><option>微信乘车码</option>
               </select>
             </div>
             <div>
@@ -903,9 +917,9 @@ function ResultCard({ entry, onConfirm, onRemove, onViewSource }: {
 }
 
 // ─── Summary Table ────────────────────────────────────────
-function SummaryTable({ records, groups, grandTotal, nonRailGrand, onUpdate, onDelete, onAdd }: {
+function SummaryTable({ records, groups, grandTotal, bigTransportGrand, commuteGrand, onUpdate, onDelete, onAdd }: {
   records: ExpenseRecord[]; groups: DailyGroup[];
-  grandTotal: number; nonRailGrand: number;
+  grandTotal: number; bigTransportGrand: number; commuteGrand: number;
   onUpdate: (id: number, f: keyof ExpenseRecord, v: string | number) => void;
   onDelete: (id: number) => void;
   onAdd: () => void;
@@ -916,7 +930,7 @@ function SummaryTable({ records, groups, grandTotal, nonRailGrand, onUpdate, onD
       <div className="flex justify-between items-center mb-5">
         <div>
           <h3 className="text-[18px] font-extrabold tracking-tight m-0">汇总表格</h3>
-          <p className="m-0 mt-1.5 text-[#98a1c0] text-[13px]">双击任意单元格即可编辑 · 按日期自动分组</p>
+          <p className="m-0 mt-1.5 text-[#98a1c0] text-[13px]">双击任意单元格即可编辑 · 按日期自动分组 · 大交通（高铁/船票）与交通费（Uber/滴滴/乘车码）分开汇总</p>
         </div>
         <div className="flex gap-2">
           <button onClick={onAdd}
@@ -949,27 +963,45 @@ function SummaryTable({ records, groups, grandTotal, nonRailGrand, onUpdate, onD
                 暂无数据 — 请先上传截图，或点击「手动添加」
               </td></tr>
             )}
-            {groups.map(g => (
-              <React.Fragment key={g.date}>
-                {g.records.map(r => (
-                  <EditableRow key={r.id} record={r} onUpdate={onUpdate} onDelete={onDelete} />
-                ))}
-                <tr className="bg-white/[0.02]">
-                  <td colSpan={4} className="px-4 py-3 border-t border-white/[0.06] text-center text-[13px] font-semibold text-[#98a1c0]">
-                    {g.date} 交通费总额 (不含高铁)
-                  </td>
-                  <td className="px-4 py-3 border-t border-white/[0.06] text-right font-mono font-bold text-[#9f67ff] pr-5">
-                    {g.nonRailTotal.toFixed(2)}
-                  </td>
-                  <td className="border-t border-white/[0.06]"></td>
-                </tr>
-              </React.Fragment>
-            ))}
+            {groups.map(g => {
+              // 排序：先大交通再交通费
+              const bigs = g.records.filter(r => isBigTransport(r.type));
+              const commutes = g.records.filter(r => !isBigTransport(r.type));
+              return (
+                <React.Fragment key={g.date}>
+                  {bigs.map(r => <EditableRow key={r.id} record={r} onUpdate={onUpdate} onDelete={onDelete} />)}
+                  {commutes.map(r => <EditableRow key={r.id} record={r} onUpdate={onUpdate} onDelete={onDelete} />)}
+
+                  {g.bigTransportTotal > 0 && (
+                    <tr className="bg-white/[0.02]">
+                      <td colSpan={4} className="px-4 py-3 border-t border-white/[0.06] text-center text-[13px] font-semibold text-[#98a1c0]">
+                        {g.date} 大交通合计 <span className="text-[11px] text-[#7d86a5] ml-1">(高铁/船票)</span>
+                      </td>
+                      <td className="px-4 py-3 border-t border-white/[0.06] text-right font-mono font-bold text-[#4ad8ff] pr-5">
+                        {g.bigTransportTotal.toFixed(2)}
+                      </td>
+                      <td className="border-t border-white/[0.06]"></td>
+                    </tr>
+                  )}
+                  {g.commuteTotal > 0 && (
+                    <tr className="bg-white/[0.02]">
+                      <td colSpan={4} className="px-4 py-3 border-t border-white/[0.06] text-center text-[13px] font-semibold text-[#98a1c0]">
+                        {g.date} 交通费合计 <span className="text-[11px] text-[#7d86a5] ml-1">(Uber/滴滴/乘车码)</span>
+                      </td>
+                      <td className="px-4 py-3 border-t border-white/[0.06] text-right font-mono font-bold text-[#9f67ff] pr-5">
+                        {g.commuteTotal.toFixed(2)}
+                      </td>
+                      <td className="border-t border-white/[0.06]"></td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              );
+            })}
             {records.length > 0 && (
               <tr>
                 <td colSpan={4} className="px-4 py-4 border-t border-white/[0.1] text-center font-extrabold text-white"
                   style={{ background: 'linear-gradient(90deg, rgba(124,77,255,0.14), rgba(94,120,255,0.14))' }}>
-                  总计（含高铁）
+                  总计（大交通 + 交通费）
                 </td>
                 <td className="px-4 py-4 border-t border-white/[0.1] text-right font-mono text-lg font-extrabold text-white pr-5"
                   style={{ background: 'linear-gradient(90deg, rgba(124,77,255,0.14), rgba(94,120,255,0.14))' }}>
@@ -984,9 +1016,10 @@ function SummaryTable({ records, groups, grandTotal, nonRailGrand, onUpdate, onD
       </div>
 
       {records.length > 0 && (
-        <div className="mt-5 flex gap-6 text-sm text-[#98a1c0]">
-          <span>非高铁合计：<span className="font-extrabold text-[#9f67ff] ml-1.5 text-base">{nonRailGrand.toFixed(2)}</span></span>
-          <span>总计（含高铁）：<span className="font-extrabold text-white ml-1.5 text-base">{grandTotal.toFixed(2)}</span></span>
+        <div className="mt-5 flex flex-wrap gap-x-6 gap-y-2 text-sm text-[#98a1c0]">
+          <span>大交通合计：<span className="font-extrabold text-[#4ad8ff] ml-1.5 text-base">{bigTransportGrand.toFixed(2)}</span></span>
+          <span>交通费合计：<span className="font-extrabold text-[#9f67ff] ml-1.5 text-base">{commuteGrand.toFixed(2)}</span></span>
+          <span>总计：<span className="font-extrabold text-white ml-1.5 text-base">{grandTotal.toFixed(2)}</span></span>
         </div>
       )}
     </section>
@@ -1065,7 +1098,7 @@ function AddRowModal({ onAdd, onClose }: {
             <label className="text-[#98a1c0] text-xs mb-2 block">类型</label>
             <select className="select w-full bg-white/[0.04] text-white rounded-[14px] px-3.5 py-3 text-sm border border-white/[0.08] outline-none"
               value={type} onChange={e => setType(e.target.value as ExpenseType)}>
-              <option>高铁票</option><option>Uber行程</option><option>滴滴</option><option>微信乘车码</option>
+              <option>高铁票</option><option>船票</option><option>Uber行程</option><option>滴滴</option><option>微信乘车码</option>
             </select>
           </div>
           <div className="col-span-2">
@@ -1156,7 +1189,8 @@ export default function App() {
 
   const groups = groupByDate(records);
   const grandTotal = records.reduce((s, r) => s + r.amount, 0);
-  const nonRailGrand = records.filter(r => r.type !== '高铁票').reduce((s, r) => s + r.amount, 0);
+  const nonRailGrand = records.filter(r => !isBigTransport(r.type)).reduce((s, r) => s + r.amount, 0);
+  const bigTransportGrand = records.filter(r => isBigTransport(r.type)).reduce((s, r) => s + r.amount, 0);
 
   const parsingCount = pending.filter(p => p.status === 'parsing').length;
   const pendingCount = pending.filter(p => p.status !== 'parsing' && (p.status === 'error' || p.items.length === 0)).length;
@@ -1174,7 +1208,7 @@ export default function App() {
           {menu === 'api' && 'API 管理'}
         </h1>
         <div className="text-[#98a1c0] mt-2 text-sm">
-          {menu === 'upload' && 'AI 自动识别 · 高铁票 · Uber · 滴滴 · 微信乘车码 · 截图 / PDF'}
+          {menu === 'upload' && 'AI 自动识别 · 高铁 · 船票 · Uber · 滴滴 · 微信乘车码 · 截图 / PDF'}
           {menu === 'history' && '查看近期处理过的票据记录'}
           {menu === 'table' && '按日期归类，导出 Excel 报销明细'}
           {menu === 'api' && '管理大模型服务商与 API Key 配置，支持 Gemini / OpenAI / Claude / OpenAI 兼容接口'}
@@ -1222,9 +1256,11 @@ export default function App() {
 
               {tabMode === 'upload' && (
                 <>
-                  <div className="grid lg:grid-cols-2 xl:grid-cols-4 gap-4 mb-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4 mb-4">
                     <Dropzone label="高铁票" hint="高铁票"
                       sub={<>支持截图上传<br />自动识别日期、车次与金额</>} onFiles={handleFiles} />
+                    <Dropzone label="船票" hint="船票"
+                      sub={<>港澳船票订单截图<br />识别码头、日期与 RMB 金额</>} onFiles={handleFiles} />
                     <Dropzone label="Uber 行程" hint="Uber行程"
                       sub={<>支持截图上传<br />提取路线、时间与币种金额</>} onFiles={handleFiles} />
                     <Dropzone label="滴滴行程单" hint="滴滴"
@@ -1241,7 +1277,7 @@ export default function App() {
 
               {tabMode === 'table' && (
                 <SummaryTable records={records} groups={groups}
-                  grandTotal={grandTotal} nonRailGrand={nonRailGrand}
+                  grandTotal={grandTotal} bigTransportGrand={bigTransportGrand} commuteGrand={nonRailGrand}
                   onUpdate={updateRecord} onDelete={deleteRecord}
                   onAdd={() => setShowAdd(true)} />
               )}
@@ -1279,7 +1315,7 @@ export default function App() {
         {/* ─── 汇总表格（独立 Tab）─────────────── */}
         {menu === 'table' && (
           <SummaryTable records={records} groups={groups}
-            grandTotal={grandTotal} nonRailGrand={nonRailGrand}
+            grandTotal={grandTotal} bigTransportGrand={bigTransportGrand} commuteGrand={nonRailGrand}
             onUpdate={updateRecord} onDelete={deleteRecord}
             onAdd={() => setShowAdd(true)} />
         )}
