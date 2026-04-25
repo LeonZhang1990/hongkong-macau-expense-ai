@@ -3,6 +3,7 @@ import * as XLSX from 'xlsx';
 
 // ─── Types ────────────────────────────────────────────────
 type ExpenseType = '高铁票' | 'Uber行程' | '滴滴' | '微信乘车码' | '船票';
+type ExpenseTypeOrEmpty = ExpenseType | '';
 type ParseStatus = 'idle' | 'parsing' | 'done' | 'error';
 
 interface ParsedItem { date: string; type: ExpenseType; route: string; amount: number; }
@@ -10,9 +11,10 @@ interface ParsedItem { date: string; type: ExpenseType; route: string; amount: n
 interface PendingFile {
   id: string;
   file: File;
-  hint: ExpenseType;
+  hint: ExpenseTypeOrEmpty;         // 空字符串代表"待确认"
+  autoGuessed: boolean;             // 是否由文件名自动归类（区分是否兜底）
   previewUrl: string | null;
-  status: ParseStatus;
+  status: 'waiting' | 'parsing' | 'done' | 'error';  // waiting: 等待用户点开始识别
   error?: string;
   items: ParsedItem[];
 }
@@ -20,6 +22,24 @@ interface PendingFile {
 // 大交通 = 高铁票 + 船票；交通费 = Uber + 滴滴 + 微信乘车码
 const BIG_TRANSPORT: ExpenseType[] = ['高铁票', '船票'];
 const isBigTransport = (t: ExpenseType) => BIG_TRANSPORT.includes(t);
+
+// 基于文件名进行本地归类，识别失败返回空串（需用户手动选）
+// 规则按优先级匹配，命中即停
+function guessTypeFromName(name: string): ExpenseTypeOrEmpty {
+  const n = (name || '').toLowerCase();
+  // 1. 高铁
+  if (/高铁|hk-?sz|sz-?hk|hkws?|西九龙/i.test(name)) return '高铁票';
+  // 2. 船票
+  if (/船票|邮轮|mo-?sz|sz-?mo|招商邮轮|金光飞航/i.test(name)) return '船票';
+  // 3. PDF 默认滴滴 / 名字含滴滴
+  if (n.endsWith('.pdf') || /滴滴|didi/i.test(name)) return '滴滴';
+  // 4. Uber
+  if (/uber|优步/i.test(name)) return 'Uber行程';
+  // 5. 微信乘车码
+  if (/港铁|乘车码|mtr|地铁/i.test(name)) return '微信乘车码';
+  // 兜底：未识别
+  return '';
+}
 
 interface ExpenseRecord { id: number; date: string; type: ExpenseType; route: string; amount: number; }
 interface DailyGroup {
@@ -750,19 +770,148 @@ function HeroOverview({ total, success, pending, parsing }: {
   );
 }
 
-// ─── Dropzone ─────────────────────────────────────────────
-function Dropzone({ label, hint, sub, onFiles }: {
-  label: string; hint: ExpenseType; sub: React.ReactNode;
-  onFiles: (files: File[], h: ExpenseType) => void;
+// ─── 文件队列视图 ─────────────────────────────────────────
+function QueueView({ entries, onUpdateHint, onRemove, onParseOne, onStartBatch }: {
+  entries: PendingFile[];
+  onUpdateHint: (id: string, hint: ExpenseType) => void;
+  onRemove: (id: string) => void;
+  onParseOne: (id: string) => void;
+  onStartBatch: () => void;
+}) {
+  // 统计
+  const waitingGrouped = entries.filter(e => e.status === 'waiting' && e.hint).length;
+  const unassigned = entries.filter(e => e.status === 'waiting' && !e.hint).length;
+  const parsing = entries.filter(e => e.status === 'parsing').length;
+  const done = entries.filter(e => e.status === 'done').length;
+  const errored = entries.filter(e => e.status === 'error').length;
+  const canStart = waitingGrouped > 0 && parsing === 0;
+
+  return (
+    <section className="mt-5">
+      <div className="flex items-center justify-between gap-4 mb-4 flex-wrap">
+        <div className="text-[13px] text-[#98a1c0]">
+          共 <span className="font-bold text-white">{entries.length}</span> 个文件
+          <span className="mx-2">·</span>
+          待识别 <span className="text-[#a9b6ff] font-bold">{waitingGrouped}</span>
+          {unassigned > 0 && <>
+            <span className="mx-2">·</span>
+            <span className="text-[#ffcf7b] font-bold">待确认类型 {unassigned}</span>
+          </>}
+          {parsing > 0 && <>
+            <span className="mx-2">·</span>
+            识别中 <span className="text-[#81efba] font-bold">{parsing}</span>
+          </>}
+          {done > 0 && <>
+            <span className="mx-2">·</span>
+            已识别 <span className="text-white font-bold">{done}</span>
+          </>}
+          {errored > 0 && <>
+            <span className="mx-2">·</span>
+            <span className="text-[#ff9fa9] font-bold">失败 {errored}</span>
+          </>}
+        </div>
+        <button onClick={onStartBatch} disabled={!canStart}
+          className="primary-btn flex items-center gap-1.5 px-5 py-2.5 text-sm rounded-[12px] text-white font-bold disabled:opacity-40 disabled:cursor-not-allowed"
+          style={{ background: 'linear-gradient(90deg, var(--purple), var(--blue))', boxShadow: '0 12px 24px rgba(104,92,255,0.28)' }}>
+          <Ic.Zap />
+          {parsing > 0 ? `识别中 (${parsing})` : `开始识别 (${waitingGrouped})`}
+        </button>
+      </div>
+
+      <div className="space-y-2">
+        {entries.filter(e => e.status !== 'done' && e.status !== 'error')
+          .map(e => <QueueRow key={e.id} entry={e}
+                              onUpdateHint={onUpdateHint}
+                              onRemove={onRemove}
+                              onParseOne={onParseOne} />)}
+      </div>
+    </section>
+  );
+}
+
+function QueueRow({ entry, onUpdateHint, onRemove, onParseOne }: {
+  entry: PendingFile;
+  onUpdateHint: (id: string, hint: ExpenseType) => void;
+  onRemove: (id: string) => void;
+  onParseOne: (id: string) => void;
+}) {
+  const isPDF = entry.file.type === 'application/pdf';
+  const unassigned = !entry.hint;
+  const typeColor: Record<ExpenseType, string> = {
+    '高铁票': 'text-[#a9b6ff]',
+    '船票': 'text-[#ff9fa9]',
+    'Uber行程': 'text-[#81efba]',
+    '滴滴': 'text-[#ffcf7b]',
+    '微信乘车码': 'text-[#4ad8ff]',
+  };
+
+  return (
+    <div className={`flex items-center gap-3 p-3 rounded-2xl border ${unassigned ? 'border-[rgba(255,182,72,0.3)]' : 'border-white/[0.06]'}`}
+      style={{ background: unassigned ? 'rgba(255,182,72,0.04)' : 'rgba(255,255,255,0.02)' }}>
+      {/* 缩略图 / 图标 */}
+      {isPDF ? (
+        <div className="w-10 h-12 rounded-lg grid place-items-center font-extrabold text-xs flex-shrink-0 text-[#ff9fa9]"
+          style={{ background: 'rgba(255,107,129,0.12)', border: '1px solid rgba(255,107,129,0.25)' }}>PDF</div>
+      ) : entry.previewUrl ? (
+        <img src={entry.previewUrl} alt="" className="w-10 h-12 object-cover rounded-lg flex-shrink-0 border border-white/10" />
+      ) : (
+        <div className="w-10 h-12 rounded-lg bg-white/5 border border-white/10 flex-shrink-0"></div>
+      )}
+
+      {/* 文件名 + 类型标签 */}
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium truncate" title={entry.file.name}>{entry.file.name}</div>
+        <div className="text-xs text-[#7d86a5] mt-0.5 flex items-center gap-2">
+          <span>{(entry.file.size / 1024).toFixed(1)} KB</span>
+          {entry.hint && entry.autoGuessed && (
+            <span className={`text-[10px] px-1.5 py-0.5 rounded ${typeColor[entry.hint]} bg-white/[0.04]`}>自动归类</span>
+          )}
+          {unassigned && <span className="text-[10px] text-[#ffcf7b]">⚠ 需手动选择类型</span>}
+          {entry.status === 'parsing' && <span className="text-[10px] text-[#a9b6ff] inline-flex items-center gap-1"><span className="animate-spin"><Ic.Spinner /></span>识别中...</span>}
+        </div>
+      </div>
+
+      {/* 类型下拉 */}
+      <select
+        value={entry.hint}
+        disabled={entry.status === 'parsing'}
+        onChange={e => onUpdateHint(entry.id, e.target.value as ExpenseType)}
+        className={`bg-white/[0.04] text-white rounded-[10px] px-3 py-2 text-xs outline-none border font-medium flex-shrink-0 ${unassigned ? 'border-[rgba(255,182,72,0.4)]' : 'border-white/[0.1]'}`}>
+        {unassigned && <option value="">请选择...</option>}
+        <option value="高铁票">高铁票</option>
+        <option value="船票">船票</option>
+        <option value="Uber行程">Uber 行程</option>
+        <option value="滴滴">滴滴</option>
+        <option value="微信乘车码">微信乘车码</option>
+      </select>
+
+      {/* 操作 */}
+      <button onClick={() => onParseOne(entry.id)}
+        disabled={!entry.hint || entry.status === 'parsing'}
+        className="text-[#a9b6ff] hover:text-white px-2 py-2 text-xs font-semibold disabled:opacity-30 disabled:cursor-not-allowed flex-shrink-0">
+        单独识别
+      </button>
+      <button onClick={() => onRemove(entry.id)}
+        className="text-[#7d86a5] hover:text-[#ff6b81] p-2 flex-shrink-0">
+        <Ic.Trash />
+      </button>
+    </div>
+  );
+}
+
+// ─── 批量上传单入口 ───────────────────────────────────────
+function BatchDropzone({ onFiles }: {
+  onFiles: (files: File[]) => void;
 }) {
   const ref = useRef<HTMLInputElement>(null);
   const [drag, setDrag] = useState(false);
-  const isPDF = hint === '滴滴';
 
   const handle = (files: FileList | null) => {
     if (!files) return;
-    const valid = Array.from(files).filter(f => f.type.startsWith('image/') || (isPDF && f.type === 'application/pdf'));
-    if (valid.length) onFiles(valid, hint);
+    const valid = Array.from(files).filter(f =>
+      f.type.startsWith('image/') || f.type === 'application/pdf'
+    );
+    if (valid.length) onFiles(valid);
   };
 
   return (
@@ -771,25 +920,25 @@ function Dropzone({ label, hint, sub, onFiles }: {
       onDragOver={e => { e.preventDefault(); setDrag(true); }}
       onDragLeave={() => setDrag(false)}
       onDrop={e => { e.preventDefault(); setDrag(false); handle(e.dataTransfer.files); }}
-      className={`p-7 rounded-[22px] text-center min-h-[174px] grid place-items-center cursor-pointer transition-all
-        ${drag ? '-translate-y-0.5' : 'hover:-translate-y-0.5'}`}
+      className={`p-10 rounded-[22px] text-center cursor-pointer transition-all ${drag ? '-translate-y-0.5' : 'hover:-translate-y-0.5'}`}
       style={{
         background: 'linear-gradient(180deg, rgba(26,31,56,0.9), rgba(19,24,45,0.94))',
-        border: `1px dashed ${drag ? 'rgba(159,103,255,0.6)' : 'rgba(155,164,209,0.22)'}`,
+        border: `1.5px dashed ${drag ? 'rgba(159,103,255,0.7)' : 'rgba(155,164,209,0.3)'}`,
         boxShadow: drag ? '0 16px 34px rgba(65,53,129,0.22)' : undefined,
       }}
     >
       <input ref={ref} type="file" multiple className="hidden"
-        accept={isPDF ? 'image/*,application/pdf' : 'image/*'}
-        onChange={e => handle(e.target.files)} />
-      <div>
-        <div className="w-[54px] h-[54px] mx-auto mb-4 rounded-[18px] grid place-items-center text-white"
-          style={{ background: 'linear-gradient(180deg, rgba(124,77,255,0.24), rgba(94,120,255,0.15))',
-                   border: '1px solid rgba(159,103,255,0.25)' }}>
-          <Ic.Upload />
-        </div>
-        <div className="font-bold text-[18px] mb-2">{label}</div>
-        <div className="text-[#98a1c0] text-[13px] leading-relaxed">{sub}</div>
+        accept="image/*,application/pdf"
+        onChange={e => { handle(e.target.files); e.target.value = ''; }} />
+      <div className="w-[64px] h-[64px] mx-auto mb-5 rounded-[20px] grid place-items-center text-white"
+        style={{ background: 'linear-gradient(180deg, rgba(124,77,255,0.24), rgba(94,120,255,0.15))',
+                 border: '1px solid rgba(159,103,255,0.3)' }}>
+        <Ic.Upload />
+      </div>
+      <div className="font-extrabold text-[20px] mb-2">拖入报销票据 · 支持一次批量上传几十张</div>
+      <div className="text-[#98a1c0] text-[13px] leading-relaxed max-w-[520px] mx-auto">
+        支持 图片（JPG/PNG）和 PDF 文件<br />
+        系统会根据文件名自动归类：<span className="text-[#a9b6ff]">高铁</span> · <span className="text-[#ff9fa9]">船票</span> · <span className="text-[#81efba]">Uber</span> · <span className="text-[#ffcf7b]">滴滴</span> · <span className="text-[#4ad8ff]">微信乘车码</span>
       </div>
     </div>
   );
@@ -811,7 +960,7 @@ function ResultCard({ entry, onConfirm, onRemove, onViewSource }: {
   const change = (i: number, f: keyof ParsedItem, v: string | number) =>
     setItems(prev => prev.map((it, idx) => idx === i ? { ...it, [f]: v } : it));
 
-  const add = () => setItems(prev => [...prev, { date: '', type: entry.hint, route: '', amount: 0 }]);
+  const add = () => setItems(prev => [...prev, { date: '', type: (entry.hint || '滴滴') as ExpenseType, route: '', amount: 0 }]);
   const removeItem = (i: number) => setItems(prev => prev.filter((_, idx) => idx !== i));
 
   // 状态 pill
@@ -1133,27 +1282,60 @@ export default function App() {
   const [tabMode, setTabMode] = useState<'upload' | 'table'>('upload');
   const [showAdd, setShowAdd] = useState(false);
 
-  const handleFiles = useCallback(async (files: File[], hint: ExpenseType) => {
-    const entries: PendingFile[] = files.map(f => ({
-      id: `${Date.now()}-${Math.random()}`,
-      file: f, hint,
-      previewUrl: f.type.startsWith('image/') ? URL.createObjectURL(f) : null,
-      status: 'parsing', items: [],
-    }));
+  // 添加文件到队列（不触发识别）
+  const handleFiles = useCallback((files: File[]) => {
+    const entries: PendingFile[] = files.map(f => {
+      const hint = guessTypeFromName(f.name);
+      return {
+        id: `${Date.now()}-${Math.random()}`,
+        file: f,
+        hint,
+        autoGuessed: hint !== '',
+        previewUrl: f.type.startsWith('image/') ? URL.createObjectURL(f) : null,
+        status: 'waiting',
+        items: [],
+      };
+    });
     setPending(prev => [...prev, ...entries]);
-
-    await Promise.all(entries.map(async (entry) => {
-      try {
-        const items = await parseFile(entry.file, entry.hint);
-        setPending(prev => prev.map(p => p.id === entry.id ? { ...p, status: 'done', items } : p));
-      } catch (err) {
-        setPending(prev => prev.map(p =>
-          p.id === entry.id
-            ? { ...p, status: 'error', error: String(err).replace('Error: ', ''), items: [{ date: '', type: entry.hint, route: '', amount: 0 }] }
-            : p));
-      }
-    }));
   }, []);
+
+  // 修改单条 pending 的类型（用户在队列里手动选）
+  const updatePendingHint = (id: string, hint: ExpenseType) => {
+    setPending(prev => prev.map(p => p.id === id ? { ...p, hint, autoGuessed: false } : p));
+  };
+
+  // 识别单条
+  const parseOne = async (entry: PendingFile) => {
+    if (!entry.hint) return;
+    setPending(prev => prev.map(p => p.id === entry.id ? { ...p, status: 'parsing' } : p));
+    try {
+      const items = await parseFile(entry.file, entry.hint);
+      setPending(prev => prev.map(p => p.id === entry.id ? { ...p, status: 'done', items } : p));
+    } catch (err) {
+      setPending(prev => prev.map(p =>
+        p.id === entry.id
+          ? { ...p, status: 'error', error: String(err).replace('Error: ', ''),
+              items: [{ date: '', type: entry.hint as ExpenseType, route: '', amount: 0 }] }
+          : p));
+    }
+  };
+
+  // 批量识别：仅识别 waiting 且已归类的
+  // 使用 Promise 池限制并发数 = 5
+  const startBatchParse = async () => {
+    const queue = pending.filter(p => p.status === 'waiting' && p.hint);
+    if (queue.length === 0) return;
+
+    const CONCURRENCY = 5;
+    let idx = 0;
+    const workers = Array.from({ length: Math.min(CONCURRENCY, queue.length) }, async () => {
+      while (idx < queue.length) {
+        const entry = queue[idx++];
+        await parseOne(entry);
+      }
+    });
+    await Promise.all(workers);
+  };
 
   const confirmPending = (id: string, items: ParsedItem[]) => {
     const valid = items.filter(it => it.date && it.amount > 0);
@@ -1256,22 +1438,21 @@ export default function App() {
 
               {tabMode === 'upload' && (
                 <>
-                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4 mb-4">
-                    <Dropzone label="高铁票" hint="高铁票"
-                      sub={<>支持截图上传<br />自动识别日期、车次与金额</>} onFiles={handleFiles} />
-                    <Dropzone label="船票" hint="船票"
-                      sub={<>港澳船票订单截图<br />识别码头、日期与 RMB 金额</>} onFiles={handleFiles} />
-                    <Dropzone label="Uber 行程" hint="Uber行程"
-                      sub={<>支持截图上传<br />提取路线、时间与币种金额</>} onFiles={handleFiles} />
-                    <Dropzone label="滴滴行程单" hint="滴滴"
-                      sub={<>支持截图 / PDF<br />统一清洗中文票据字段</>} onFiles={handleFiles} />
-                    <Dropzone label="微信乘车码" hint="微信乘车码"
-                      sub={<>港铁 / 地铁支付凭证<br />取 RMB 金额 · 起讫从文件名取</>} onFiles={handleFiles} />
-                  </div>
-                  <div className="flex justify-between gap-4 text-[#98a1c0] text-[13px] mt-2.5">
-                    <span>建议：优先上传清晰、完整截图，系统会自动提取关键字段。</span>
-                    <span>当前共 {pending.length} 个文件待核对</span>
-                  </div>
+                  <BatchDropzone onFiles={handleFiles} />
+
+                  {/* 文件队列（已加入但未/正在识别） */}
+                  {pending.length > 0 && (
+                    <QueueView
+                      entries={pending}
+                      onUpdateHint={updatePendingHint}
+                      onRemove={removePending}
+                      onParseOne={(id) => {
+                        const e = pending.find(p => p.id === id);
+                        if (e) parseOne(e);
+                      }}
+                      onStartBatch={startBatchParse}
+                    />
+                  )}
                 </>
               )}
 
