@@ -2,7 +2,7 @@ import React, { useState, useCallback, useRef } from 'react';
 import * as XLSX from 'xlsx';
 
 // ─── Types ────────────────────────────────────────────────
-type ExpenseType = '高铁票' | 'Uber行程' | '滴滴';
+type ExpenseType = '高铁票' | 'Uber行程' | '滴滴' | '微信乘车码';
 type ParseStatus = 'idle' | 'parsing' | 'done' | 'error';
 
 interface ParsedItem { date: string; type: ExpenseType; route: string; amount: number; }
@@ -193,6 +193,7 @@ function HistoryPanel({ onReuse }: { onReuse?: (records: ParsedItem[]) => void }
     rail: list.filter(h => h.hint === '高铁票').length,
     uber: list.filter(h => h.hint === 'Uber行程').length,
     didi: list.filter(h => h.hint === '滴滴').length,
+    mtr: list.filter(h => h.hint === '微信乘车码').length,
   };
 
   return (
@@ -219,12 +220,13 @@ function HistoryPanel({ onReuse }: { onReuse?: (records: ParsedItem[]) => void }
           </div>
         </div>
 
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-5 gap-3">
           {[
             { label: '总记录', value: stats.total, color: 'text-white' },
             { label: '高铁票', value: stats.rail, color: 'text-[#a9b6ff]' },
             { label: 'Uber 行程', value: stats.uber, color: 'text-[#81efba]' },
             { label: '滴滴', value: stats.didi, color: 'text-[#ffcf7b]' },
+            { label: '微信乘车码', value: stats.mtr, color: 'text-[#4ad8ff]' },
           ].map((s, i) => (
             <div key={i} className="bg-white/[0.04] border border-white/[0.06] rounded-2xl p-4">
               <div className="text-[#98a1c0] text-xs mb-2">{s.label}</div>
@@ -239,7 +241,7 @@ function HistoryPanel({ onReuse }: { onReuse?: (records: ParsedItem[]) => void }
         style={{ background: 'rgba(23,28,51,0.92)', boxShadow: '0 20px 60px rgba(0,0,0,0.35)' }}>
         <div className="flex items-center justify-between mb-5">
           <div className="inline-flex gap-2 bg-white/[0.03] p-1.5 rounded-2xl border border-white/[0.06]">
-            {(['all', '高铁票', 'Uber行程', '滴滴'] as const).map(k => (
+            {(['all', '高铁票', 'Uber行程', '滴滴', '微信乘车码'] as const).map(k => (
               <button key={k} onClick={() => setFilter(k)}
                 className={`border-0 px-4 py-2 rounded-xl font-semibold cursor-pointer text-sm ${
                   filter === k ? 'text-white' : 'bg-transparent text-[#98a1c0] hover:text-white'
@@ -266,6 +268,7 @@ function HistoryPanel({ onReuse }: { onReuse?: (records: ParsedItem[]) => void }
                 '高铁票': 'text-[#a9b6ff] bg-[rgba(110,120,255,0.12)] border-[rgba(110,120,255,0.2)]',
                 'Uber行程': 'text-[#81efba] bg-[rgba(57,217,138,0.12)] border-[rgba(57,217,138,0.2)]',
                 '滴滴': 'text-[#ffcf7b] bg-[rgba(255,182,72,0.12)] border-[rgba(255,182,72,0.2)]',
+                '微信乘车码': 'text-[#4ad8ff] bg-[rgba(74,216,255,0.12)] border-[rgba(74,216,255,0.2)]',
               };
               return (
                 <div key={h.id} className="rounded-2xl border border-white/[0.06] overflow-hidden"
@@ -857,7 +860,7 @@ function ResultCard({ entry, onConfirm, onRemove, onViewSource }: {
               {i === 0 && <label className="block text-[#98a1c0] text-[11px] mb-2">类型</label>}
               <select className="select w-full bg-white/[0.04] text-white rounded-[14px] px-3.5 py-3 text-sm outline-none border border-white/[0.08] focus:border-[rgba(124,77,255,0.72)]"
                 value={it.type} onChange={e => change(i, 'type', e.target.value as ExpenseType)}>
-                <option>高铁票</option><option>Uber行程</option><option>滴滴</option>
+                <option>高铁票</option><option>Uber行程</option><option>滴滴</option><option>微信乘车码</option>
               </select>
             </div>
             <div>
@@ -1062,7 +1065,7 @@ function AddRowModal({ onAdd, onClose }: {
             <label className="text-[#98a1c0] text-xs mb-2 block">类型</label>
             <select className="select w-full bg-white/[0.04] text-white rounded-[14px] px-3.5 py-3 text-sm border border-white/[0.08] outline-none"
               value={type} onChange={e => setType(e.target.value as ExpenseType)}>
-              <option>高铁票</option><option>Uber行程</option><option>滴滴</option>
+              <option>高铁票</option><option>Uber行程</option><option>滴滴</option><option>微信乘车码</option>
             </select>
           </div>
           <div className="col-span-2">
@@ -1171,7 +1174,7 @@ export default function App() {
           {menu === 'api' && 'API 管理'}
         </h1>
         <div className="text-[#98a1c0] mt-2 text-sm">
-          {menu === 'upload' && 'AI 自动识别 · 高铁票 · Uber · 滴滴 · 截图 / PDF'}
+          {menu === 'upload' && 'AI 自动识别 · 高铁票 · Uber · 滴滴 · 微信乘车码 · 截图 / PDF'}
           {menu === 'history' && '查看近期处理过的票据记录'}
           {menu === 'table' && '按日期归类，导出 Excel 报销明细'}
           {menu === 'api' && '管理大模型服务商与 API Key 配置，支持 Gemini / OpenAI / Claude / OpenAI 兼容接口'}
@@ -1219,13 +1222,15 @@ export default function App() {
 
               {tabMode === 'upload' && (
                 <>
-                  <div className="grid lg:grid-cols-3 gap-4 mb-4">
+                  <div className="grid lg:grid-cols-2 xl:grid-cols-4 gap-4 mb-4">
                     <Dropzone label="高铁票" hint="高铁票"
                       sub={<>支持截图上传<br />自动识别日期、车次与金额</>} onFiles={handleFiles} />
                     <Dropzone label="Uber 行程" hint="Uber行程"
                       sub={<>支持截图上传<br />提取路线、时间与币种金额</>} onFiles={handleFiles} />
                     <Dropzone label="滴滴行程单" hint="滴滴"
                       sub={<>支持截图 / PDF<br />统一清洗中文票据字段</>} onFiles={handleFiles} />
+                    <Dropzone label="微信乘车码" hint="微信乘车码"
+                      sub={<>港铁 / 地铁支付凭证<br />取 RMB 金额 · 起讫从文件名取</>} onFiles={handleFiles} />
                   </div>
                   <div className="flex justify-between gap-4 text-[#98a1c0] text-[13px] mt-2.5">
                     <span>建议：优先上传清晰、完整截图，系统会自动提取关键字段。</span>

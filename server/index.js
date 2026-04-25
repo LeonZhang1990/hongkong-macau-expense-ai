@@ -139,20 +139,20 @@ const JSON_SCHEMA = `
 [
   {
     "date": "x月x日",
-    "type": "高铁票" | "Uber行程" | "滴滴",
+    "type": "高铁票" | "Uber行程" | "滴滴" | "微信乘车码",
     "route": "起点->终点",
     "amount": 数字
   }
 ]
 规则：
-- date: 出行日期，只写"x月x日"（如"1月6日"），不含年份
-- type: 严格三选一 "高铁票" / "Uber行程" / "滴滴"
-- route: 保留完整站名/地址，高铁用"A站->B站"，Uber/滴滴用"A - B"或"A->B"
-- amount: 纯数字，不含货币符号；港币直接取数字；识别不确定填 0
+- date: 出行/支付日期，只写"x月x日"（如"1月6日"），不含年份
+- type: 严格四选一 "高铁票" / "Uber行程" / "滴滴" / "微信乘车码"
+- route: 保留完整站名/地址，高铁用"A站->B站"，Uber/滴滴用"A - B"或"A->B"；若图片中无起讫信息则留空字符串
+- amount: 纯数字，不含货币符号；微信乘车码请取**人民币 RMB** 金额（如 -39.00 取 39）；港币直接取数字；识别不确定填 0
 - 只输出 JSON 数组，不要 markdown 代码块，不要额外解释`;
 
 const IMAGE_PROMPT = (hint) => `你是差旅报销单据识别助手。这是一张${hint ? `【${hint}】` : '交通'}票据截图，请提取所有行程记录。
-${JSON_SCHEMA}`;
+${hint === '微信乘车码' ? '说明：这是微信支付凭证截图，商品栏通常写"港鐵乘車/地铁乘车"等；金额请使用人民币 RMB 最终支付金额（标价单位若是港币请忽略，取顶部"-39.00"这类实际扣款）。截图本身一般不含起点终点，route 请留空字符串，由系统从文件名补齐。\n' : ''}${JSON_SCHEMA}`;
 
 const TEXT_PROMPT = (hint, text) => `你是差旅报销单据识别助手。以下是从${hint ? `【${hint}】` : '滴滴'}行程单 PDF 中提取的文字内容，请从中识别所有行程记录。
 ${JSON_SCHEMA}
@@ -160,14 +160,49 @@ ${JSON_SCHEMA}
 PDF 文字内容：
 ${text}`;
 
+// ─── 从文件名里提取起点终点 ────────────────────────────────
+// 支持的分隔符： -> / 到 / - / — / ～ / 以及中文连字符
+// 例：
+//   "港铁付费截图39元 香港办公室-福田口岸 4月1日.jpg"  => "香港办公室->福田口岸"
+//   "微信乘车码 香港办公室 -> 福田口岸 4月2日 39.jpg"   => "香港办公室->福田口岸"
+//   "WeChat 4月2日 深圳北站到香港西九龙 68.jpg"         => "深圳北站->香港西九龙"
+function extractRouteFromFilename(name) {
+  if (!name) return '';
+  // 去掉扩展名
+  const base = name.replace(/\.[^.]+$/, '');
+  // 先去掉常见"无关词"和金额/日期片段，避免它们被当成起点/终点
+  const cleaned = base
+    .replace(/港铁付费截图\d*元?/g, ' ')
+    .replace(/微信乘车码/g, ' ')
+    .replace(/wechat[\s_-]*(mtr)?/gi, ' ')
+    .replace(/mtr/gi, ' ')
+    .replace(/\d+月\d+日/g, ' ')
+    .replace(/\d+\.\d+|\d+元|hk\$?\s*\d+(\.\d+)?|rmb\s*\d+(\.\d+)?/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // 按常见分隔符尝试分割：-> → ⇒ 到 ~ ～ — –
+  const patterns = [
+    /([^\s\->→⇒~～—–-]+)\s*(?:->|→|⇒|到|~|～|—|–|-)\s*([^\s\->→⇒~～—–-]+)/,
+  ];
+  for (const re of patterns) {
+    const m = cleaned.match(re);
+    if (m && m[1] && m[2]) {
+      return `${m[1].trim()}->${m[2].trim()}`;
+    }
+  }
+  return '';
+}
+
 function extractJSON(raw) {
   const cleaned = (raw || '').replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
   const match = cleaned.match(/\[[\s\S]*\]/);
   if (!match) throw new Error('模型未返回有效 JSON 数组，原始输出：' + cleaned.slice(0, 200));
   const records = JSON.parse(match[0]);
+  const allowed = ['高铁票', 'Uber行程', '滴滴', '微信乘车码'];
   return records.map((r) => ({
     date: String(r.date || ''),
-    type: ['高铁票', 'Uber行程', '滴滴'].includes(r.type) ? r.type : '滴滴',
+    type: allowed.includes(r.type) ? r.type : '滴滴',
     route: String(r.route || ''),
     amount: parseFloat(r.amount) || 0,
   }));
@@ -278,6 +313,16 @@ app.post('/api/parse', upload.single('file'), async (req, res) => {
     }
 
     const records = extractJSON(raw);
+
+    // 针对微信乘车码：截图中通常没有起讫站点，自动从文件名补齐
+    // 同时如果 hint 是"微信乘车码"但模型返回了别的 type，强制修正
+    const routeFromName = extractRouteFromFilename(originalname);
+    for (const r of records) {
+      if (hint === '微信乘车码') r.type = '微信乘车码';
+      if (r.type === '微信乘车码' && !r.route && routeFromName) {
+        r.route = routeFromName;
+      }
+    }
 
     addHistory({
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
