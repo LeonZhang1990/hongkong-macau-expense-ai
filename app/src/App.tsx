@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef } from 'react';
-import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx-js-style';
 
 // ─── Types ────────────────────────────────────────────────
 type ExpenseType = '高铁票' | 'Uber行程' | '滴滴' | '微信乘车码' | '船票';
@@ -105,11 +105,30 @@ function exportExcel(_records: ExpenseRecord[], groups: DailyGroup[]) {
   ws['!cols'] = [{ wch: 6 }, { wch: 10 }, { wch: 12 }, { wch: 60 }, { wch: 12 }];
   ws['!merges'] = merges;
 
-  for (const r of totalRowIndexes) {
-    const labelAddr = XLSX.utils.encode_cell({ r, c: 1 });
-    const amountAddr = XLSX.utils.encode_cell({ r, c: 4 });
-    if (ws[labelAddr]) ws[labelAddr].s = { alignment: { horizontal: 'right', vertical: 'center' }, font: { bold: true } };
-    if (ws[amountAddr]) ws[amountAddr].s = { alignment: { horizontal: 'right', vertical: 'center' }, font: { bold: true } };
+  // 所有单元格全部居中对齐（水平+垂直）
+  const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const addr = XLSX.utils.encode_cell({ r, c });
+      if (!ws[addr]) continue;
+      const isHeader = r === 0;
+      const isTotal = totalRowIndexes.includes(r);
+      ws[addr].s = {
+        alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+        font: { bold: isHeader || isTotal, sz: isHeader ? 12 : 11 },
+        fill: isHeader
+          ? { fgColor: { rgb: 'F2F2F7' } }
+          : isTotal
+          ? { fgColor: { rgb: 'FFF9E6' } }
+          : undefined,
+        border: {
+          top:    { style: 'thin', color: { rgb: 'D0D5DD' } },
+          bottom: { style: 'thin', color: { rgb: 'D0D5DD' } },
+          left:   { style: 'thin', color: { rgb: 'D0D5DD' } },
+          right:  { style: 'thin', color: { rgb: 'D0D5DD' } },
+        },
+      };
+    }
   }
 
   XLSX.utils.book_append_sheet(wb, ws, '报销明细');
@@ -698,13 +717,8 @@ function Sidebar({ active, onChange }: { active: string; onChange: (k: string) =
   return (
     <aside className="p-7 border-r border-white/5 hidden md:block"
       style={{ background: 'linear-gradient(180deg, rgba(9,12,24,0.96), rgba(11,15,30,0.92))' }}>
-      <div className="text-[18px] font-extrabold tracking-tight mb-2">leonlmzhang</div>
-      <div className="text-[#98a1c0] text-[13px] flex items-center gap-2 mb-7">
-        Tencent
-        <span className="text-xs text-[#d9cbff] bg-[rgba(124,77,255,0.14)] border border-[rgba(159,103,255,0.24)] px-2.5 py-1 rounded-[10px]">
-          AI 识别中台
-        </span>
-      </div>
+      <div className="text-[18px] font-extrabold tracking-tight mb-1">Leon's Vibe Coding</div>
+      <div className="text-[#c8cee6] text-[22px] font-extrabold tracking-tight mb-7">港澳差旅报销</div>
       <nav className="grid gap-2.5">
         {items.map(it => (
           <button key={it.key} onClick={() => onChange(it.key)}
@@ -771,12 +785,13 @@ function HeroOverview({ total, success, pending, parsing }: {
 }
 
 // ─── 文件队列视图 ─────────────────────────────────────────
-function QueueView({ entries, onUpdateHint, onRemove, onParseOne, onStartBatch }: {
+function QueueView({ entries, onUpdateHint, onRemove, onParseOne, onStartBatch, onViewSource }: {
   entries: PendingFile[];
   onUpdateHint: (id: string, hint: ExpenseType) => void;
   onRemove: (id: string) => void;
   onParseOne: (id: string) => void;
   onStartBatch: () => void;
+  onViewSource: (entry: PendingFile) => void;
 }) {
   // 统计
   const waitingGrouped = entries.filter(e => e.status === 'waiting' && e.hint).length;
@@ -823,17 +838,19 @@ function QueueView({ entries, onUpdateHint, onRemove, onParseOne, onStartBatch }
           .map(e => <QueueRow key={e.id} entry={e}
                               onUpdateHint={onUpdateHint}
                               onRemove={onRemove}
-                              onParseOne={onParseOne} />)}
+                              onParseOne={onParseOne}
+                              onViewSource={onViewSource} />)}
       </div>
     </section>
   );
 }
 
-function QueueRow({ entry, onUpdateHint, onRemove, onParseOne }: {
+function QueueRow({ entry, onUpdateHint, onRemove, onParseOne, onViewSource }: {
   entry: PendingFile;
   onUpdateHint: (id: string, hint: ExpenseType) => void;
   onRemove: (id: string) => void;
   onParseOne: (id: string) => void;
+  onViewSource: (entry: PendingFile) => void;
 }) {
   const isPDF = entry.file.type === 'application/pdf';
   const unassigned = !entry.hint;
@@ -848,12 +865,16 @@ function QueueRow({ entry, onUpdateHint, onRemove, onParseOne }: {
   return (
     <div className={`flex items-center gap-3 p-3 rounded-2xl border ${unassigned ? 'border-[rgba(255,182,72,0.3)]' : 'border-white/[0.06]'}`}
       style={{ background: unassigned ? 'rgba(255,182,72,0.04)' : 'rgba(255,255,255,0.02)' }}>
-      {/* 缩略图 / 图标 */}
+      {/* 缩略图 / 图标（可点击查看原图/PDF） */}
       {isPDF ? (
-        <div className="w-10 h-12 rounded-lg grid place-items-center font-extrabold text-xs flex-shrink-0 text-[#ff9fa9]"
-          style={{ background: 'rgba(255,107,129,0.12)', border: '1px solid rgba(255,107,129,0.25)' }}>PDF</div>
+        <div onClick={() => onViewSource(entry)}
+          className="w-10 h-12 rounded-lg grid place-items-center font-extrabold text-xs flex-shrink-0 text-[#ff9fa9] cursor-pointer hover:brightness-125 transition-all"
+          style={{ background: 'rgba(255,107,129,0.12)', border: '1px solid rgba(255,107,129,0.25)' }}
+          title="点击打开 PDF">PDF</div>
       ) : entry.previewUrl ? (
-        <img src={entry.previewUrl} alt="" className="w-10 h-12 object-cover rounded-lg flex-shrink-0 border border-white/10" />
+        <img src={entry.previewUrl} alt="" onClick={() => onViewSource(entry)}
+          className="w-10 h-12 object-cover rounded-lg flex-shrink-0 border border-white/10 cursor-zoom-in hover:brightness-110 transition-all"
+          title="点击查看原图" />
       ) : (
         <div className="w-10 h-12 rounded-lg bg-white/5 border border-white/10 flex-shrink-0"></div>
       )}
@@ -979,16 +1000,23 @@ function ResultCard({ entry, onConfirm, onRemove, onViewSource }: {
       style={{ background: 'linear-gradient(180deg, rgba(23,28,52,0.96), rgba(18,23,43,0.98))' }}>
       {/* Head */}
       <div className="flex gap-3.5 items-start p-[18px] border-b border-white/[0.06]">
-        {/* 缩略图 or PDF badge */}
+        {/* 缩略图 or PDF badge（点击可放大查看） */}
         {isPDF ? (
-          <div className="w-[58px] h-[72px] rounded-[14px] grid place-items-center font-extrabold text-sm flex-shrink-0"
+          <div onClick={() => onViewSource(entry)}
+            className="w-[58px] h-[72px] rounded-[14px] grid place-items-center font-extrabold text-sm flex-shrink-0 cursor-pointer hover:brightness-125 transition-all"
             style={{ background: 'linear-gradient(180deg, rgba(255,107,129,0.18), rgba(255,107,129,0.08))',
-                     color: '#ff8898', border: '1px solid rgba(255,107,129,0.22)' }}>
+                     color: '#ff8898', border: '1px solid rgba(255,107,129,0.22)' }}
+            title="点击打开 PDF">
             PDF
           </div>
         ) : entry.previewUrl ? (
-          <div className="w-[58px] h-[72px] rounded-[14px] overflow-hidden flex-shrink-0 border border-white/10">
+          <div onClick={() => onViewSource(entry)}
+            className="w-[58px] h-[72px] rounded-[14px] overflow-hidden flex-shrink-0 border border-white/10 cursor-zoom-in hover:brightness-110 transition-all relative group"
+            title="点击查看原图">
             <img src={entry.previewUrl} alt="" className="w-full h-full object-cover" />
+            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-all grid place-items-center opacity-0 group-hover:opacity-100">
+              <span className="text-white text-[10px] font-bold">🔍 查看</span>
+            </div>
           </div>
         ) : (
           <div className="w-[58px] h-[72px] rounded-[14px] flex-shrink-0"
@@ -1222,6 +1250,51 @@ function EditableRow({ record, onUpdate, onDelete }: {
 }
 
 // ─── AddRow Modal ─────────────────────────────────────────
+// ─── Lightbox 图片大图查看 ────────────────────────────────
+function Lightbox({ url, name, onClose }: {
+  url: string; name: string; onClose: () => void;
+}) {
+  // 按 ESC 关闭
+  React.useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', h);
+    // 打开时锁住 body 滚动
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', h);
+      document.body.style.overflow = prev;
+    };
+  }, [onClose]);
+
+  return (
+    <div onClick={onClose}
+      className="fixed inset-0 z-[9999] flex items-center justify-center p-6 cursor-zoom-out"
+      style={{ background: 'rgba(5,8,20,0.92)', backdropFilter: 'blur(8px)' }}>
+      {/* 顶部文件名 + 关闭按钮 */}
+      <div className="absolute top-4 left-0 right-0 flex items-center justify-between px-6 text-white">
+        <div className="text-sm font-semibold truncate max-w-[70%]" title={name}>{name}</div>
+        <div className="flex gap-2">
+          <a href={url} download={name} onClick={e => e.stopPropagation()}
+            className="px-3 py-1.5 text-xs rounded-lg bg-white/10 hover:bg-white/20 text-white border border-white/20">
+            下载
+          </a>
+          <button onClick={onClose}
+            className="px-3 py-1.5 text-xs rounded-lg bg-white/10 hover:bg-white/20 text-white border border-white/20">
+            关闭 (ESC)
+          </button>
+        </div>
+      </div>
+
+      {/* 图片：不拉伸，最大占满视口 90% */}
+      <img src={url} alt={name}
+        onClick={e => e.stopPropagation()}
+        className="max-w-[92vw] max-h-[88vh] object-contain rounded-2xl shadow-2xl cursor-default"
+        style={{ boxShadow: '0 30px 80px rgba(0,0,0,0.6)' }} />
+    </div>
+  );
+}
+
 function AddRowModal({ onAdd, onClose }: {
   onAdd: (r: Omit<ExpenseRecord, 'id'>) => void; onClose: () => void;
 }) {
@@ -1281,6 +1354,18 @@ export default function App() {
   const [menu, setMenu] = useState<'upload' | 'history' | 'table' | 'api'>('upload');
   const [tabMode, setTabMode] = useState<'upload' | 'table'>('upload');
   const [showAdd, setShowAdd] = useState(false);
+  const [lightboxSrc, setLightboxSrc] = useState<{ url: string; name: string } | null>(null);
+
+  // 点击缩略图时：图片走 Lightbox 弹窗；PDF 仍然新标签页打开
+  const openSource = (entry: PendingFile) => {
+    const isPDF = entry.file.type === 'application/pdf';
+    if (isPDF) {
+      const url = entry.previewUrl || URL.createObjectURL(entry.file);
+      window.open(url, '_blank');
+    } else if (entry.previewUrl) {
+      setLightboxSrc({ url: entry.previewUrl, name: entry.file.name });
+    }
+  };
 
   // 添加文件到队列（不触发识别）
   const handleFiles = useCallback((files: File[]) => {
@@ -1360,8 +1445,7 @@ export default function App() {
   };
 
   const viewSource = (entry: PendingFile) => {
-    if (entry.previewUrl) window.open(entry.previewUrl, '_blank');
-    else if (entry.file) window.open(URL.createObjectURL(entry.file), '_blank');
+    openSource(entry);
   };
 
   const updateRecord = (id: number, f: keyof ExpenseRecord, v: string | number) =>
@@ -1451,6 +1535,7 @@ export default function App() {
                         if (e) parseOne(e);
                       }}
                       onStartBatch={startBatchParse}
+                      onViewSource={openSource}
                     />
                   )}
                 </>
@@ -1519,6 +1604,7 @@ export default function App() {
       </main>
 
       {showAdd && <AddRowModal onAdd={addRecord} onClose={() => setShowAdd(false)} />}
+      {lightboxSrc && <Lightbox url={lightboxSrc.url} name={lightboxSrc.name} onClose={() => setLightboxSrc(null)} />}
     </div>
   );
 }
