@@ -8,7 +8,8 @@ import { fileURLToPath } from 'url';
 import { callLLM, PROVIDERS } from './llm.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PORT = 3001;
+const PORT = parseInt(process.env.PORT || '3001', 10);
+const HOST = process.env.HOST || '0.0.0.0';
 
 // ─── 配置持久化 ────────────────────────────────────────────
 const CONFIG_PATH = path.join(__dirname, 'config.json');
@@ -18,6 +19,26 @@ const DEFAULT_CONFIG = {
   model: 'gemini-2.5-flash',
   baseURL: '',
 };
+
+// 如果设置了环境变量，优先覆盖默认值（便于 Railway 等平台预置 Key）
+function applyEnvOverrides(cfg) {
+  const envProvider = process.env.LLM_PROVIDER;
+  const envModel = process.env.LLM_MODEL;
+  const envBase = process.env.LLM_BASE_URL;
+  if (envProvider) cfg.provider = envProvider;
+  if (envModel) cfg.model = envModel;
+  if (envBase !== undefined) cfg.baseURL = envBase;
+
+  // Key：按当前 provider 优先读对应 env
+  const provider = cfg.provider;
+  const envKey =
+    (provider === 'gemini' && process.env.GEMINI_API_KEY) ||
+    (provider === 'openai' && process.env.OPENAI_API_KEY) ||
+    (provider === 'anthropic' && process.env.ANTHROPIC_API_KEY) ||
+    process.env.LLM_API_KEY;
+  if (envKey) cfg.apiKey = envKey;
+  return cfg;
+}
 
 function loadConfig() {
   try {
@@ -35,7 +56,7 @@ function saveConfig(cfg) {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf8');
 }
 
-let config = loadConfig();
+let config = applyEnvOverrides(loadConfig());
 
 // ─── 识别历史持久化 ────────────────────────────────────────
 const HISTORY_PATH = path.join(__dirname, 'history.json');
@@ -289,7 +310,7 @@ app.use((req, res, next) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`✅ Server running on http://localhost:${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`✅ Server running on http://${HOST}:${PORT}`);
   console.log(`✅ Config: provider=${config.provider}, model=${config.model}, key=${maskKey(config.apiKey)}`);
 });

@@ -25,43 +25,67 @@
 | AI 调用层 | `@google/generative-ai` / `openai` SDK / Anthropic REST API |
 | 持久化 | 本地 JSON 文件（`server/config.json`、`server/history.json`） |
 
-## 快速开始
+## 部署到 Railway（推荐 · 公网访问）
+
+想要一个永久可访问的 URL？推荐部署到 [Railway](https://railway.com)：
+
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template?template=https%3A%2F%2Fgithub.com%2FLeonZhang1990%2Fhongkong-macau-expense-ai)
+
+### 操作步骤
+
+1. 打开 <https://railway.com/new>（首次使用需登录并绑定 GitHub）
+2. 选择 **Deploy from GitHub repo** → 选中 `LeonZhang1990/hongkong-macau-expense-ai`
+3. 等待 Railway 自动：`npm install` → `postinstall`（构建前端）→ `npm start`
+4. 部署完成后在服务页面 → **Settings → Networking → Generate Domain**，获得公网 URL（形如 `xxx.up.railway.app`）
+5. 打开该 URL → **API 管理** → 填入你的 Key → 保存即可
+
+### 可选环境变量（避免每次部署后重新填 Key）
+
+在 Railway 的 **Variables** 中配置（重启后生效）：
+
+| 变量 | 说明 |
+|------|------|
+| `LLM_PROVIDER` | `gemini` / `openai` / `anthropic` / `openai-compat` |
+| `LLM_MODEL` | 模型名，例如 `gemini-2.5-flash`、`gpt-4o`、`claude-3-5-sonnet-latest` |
+| `LLM_BASE_URL` | 仅 `openai-compat` / 自定义端点需要 |
+| `GEMINI_API_KEY` | 使用 Gemini 时填 |
+| `OPENAI_API_KEY` | 使用 OpenAI 时填 |
+| `ANTHROPIC_API_KEY` | 使用 Claude 时填 |
+| `LLM_API_KEY` | 通用兜底：匹配不到前三个时使用 |
+
+> 注意：Railway 的文件系统不持久化，`config.json` 和 `history.json` 在每次部署时会丢失。想要持久化识别历史，需要接入 Railway Volume 或外部数据库（暂未内置）。
+
+---
+
+## 本地运行
+
+
 
 ### 环境要求
 
 - Node.js **20+**（推荐 20 LTS 或更高）
-- npm / pnpm / yarn 任一
 
-### 1. 克隆 & 安装依赖
-
-```bash
-git clone https://github.com/<你的用户名>/<仓库名>.git
-cd <仓库名>
-
-# 安装前端依赖
-cd app && npm install
-
-# 安装后端依赖
-cd ../server && npm install
-```
-
-### 2. 构建前端
+### 一键安装与启动（推荐）
 
 ```bash
-cd app
-npm run build
-```
-
-### 3. 启动后端（同时托管前端静态文件）
-
-```bash
-cd server
-node index.js
+git clone https://github.com/LeonZhang1990/hongkong-macau-expense-ai.git
+cd hongkong-macau-expense-ai
+npm install          # 触发 postinstall：自动安装前后端依赖 + 构建前端
+npm start            # 启动后端（同时托管前端静态页面）
 ```
 
 打开浏览器访问：**`http://localhost:3001`**
 
-### 4. 配置 API Key（首次启动必做）
+### 分步安装（仅需要时）
+
+```bash
+cd app && npm install
+cd ../server && npm install
+cd ../app && npm run build
+cd ../server && node index.js
+```
+
+### 配置 API Key（首次启动必做）
 
 1. 左侧菜单点击 **"API 管理"**
 2. 选择你要用的厂商（Gemini / OpenAI / Claude / OpenAI 兼容）

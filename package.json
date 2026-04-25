@@ -1,0 +1,17 @@
+{
+  "name": "hongkong-macau-expense-ai",
+  "version": "1.0.0",
+  "description": "港澳差旅报销处理系统：基于多模态大模型的个人差旅票据识别与汇总工具",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "install:all": "npm install --prefix app && npm install --prefix server",
+    "build": "npm run build --prefix app",
+    "start": "node server/index.js",
+    "postinstall": "npm install --prefix app && npm install --prefix server && npm run build --prefix app"
+  },
+  "license": "MIT"
+}
