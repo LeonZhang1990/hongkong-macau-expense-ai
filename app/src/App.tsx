@@ -1101,6 +1101,14 @@ function SummaryTable({ records, groups, grandTotal, bigTransportGrand, commuteG
   onDelete: (id: number) => void;
   onAdd: () => void;
 }) {
+  // 按展示顺序（先大交通后交通费，按组遍历）计算每行的序号，与 Excel 导出保持一致
+  const seqMap = new Map<number, number>();
+  let seqCounter = 1;
+  for (const g of groups) {
+    for (const r of g.records.filter(r => isBigTransport(r.type))) seqMap.set(r.id, seqCounter++);
+    for (const r of g.records.filter(r => !isBigTransport(r.type))) seqMap.set(r.id, seqCounter++);
+  }
+
   return (
     <section className="mt-6 rounded-[28px] border border-white/[0.08] p-6"
       style={{ background: 'rgba(23,28,51,0.92)', boxShadow: '0 20px 60px rgba(0,0,0,0.35)' }}>
@@ -1141,13 +1149,13 @@ function SummaryTable({ records, groups, grandTotal, bigTransportGrand, commuteG
               </td></tr>
             )}
             {groups.map(g => {
-              // 排序：先大交通再交通费
+              // 排序：先大交通再交通费（与 Excel 导出顺序保持一致）
               const bigs = g.records.filter(r => isBigTransport(r.type));
               const commutes = g.records.filter(r => !isBigTransport(r.type));
               return (
                 <React.Fragment key={g.date}>
-                  {bigs.map(r => <EditableRow key={r.id} record={r} onUpdate={onUpdate} onDelete={onDelete} />)}
-                  {commutes.map(r => <EditableRow key={r.id} record={r} onUpdate={onUpdate} onDelete={onDelete} />)}
+                  {bigs.map(r => <EditableRow key={r.id} record={r} seq={seqMap.get(r.id) || 0} onUpdate={onUpdate} onDelete={onDelete} />)}
+                  {commutes.map(r => <EditableRow key={r.id} record={r} seq={seqMap.get(r.id) || 0} onUpdate={onUpdate} onDelete={onDelete} />)}
 
                   {g.bigTransportTotal > 0 && (
                     <tr className="bg-white/[0.02]">
@@ -1204,8 +1212,9 @@ function SummaryTable({ records, groups, grandTotal, bigTransportGrand, commuteG
 }
 
 // ─── EditableRow ──────────────────────────────────────────
-function EditableRow({ record, onUpdate, onDelete }: {
+function EditableRow({ record, seq, onUpdate, onDelete }: {
   record: ExpenseRecord;
+  seq: number;
   onUpdate: (id: number, f: keyof ExpenseRecord, v: string | number) => void;
   onDelete: (id: number) => void;
 }) {
@@ -1234,7 +1243,7 @@ function EditableRow({ record, onUpdate, onDelete }: {
 
   return (
     <tr className="hover:bg-white/[0.02] transition-colors group">
-      <td className="px-4 py-3 border-t border-white/[0.04] text-center text-[#7d86a5]">{record.id}</td>
+      <td className="px-4 py-3 border-t border-white/[0.04] text-center text-[#7d86a5]">{seq}</td>
       {cell('date', 'text-center whitespace-nowrap')}
       {cell('type', 'text-center text-[#a9b6ff]')}
       {cell('route', 'text-left')}
