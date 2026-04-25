@@ -1,0 +1,80 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #0a0d1a;
+  --bg-soft: #11162a;
+  --panel: rgba(23, 28, 51, 0.92);
+  --panel-2: rgba(29, 35, 64, 0.92);
+  --card: rgba(19, 24, 46, 0.94);
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.14);
+  --text: #f3f5ff;
+  --muted: #98a1c0;
+  --muted-2: #7d86a5;
+  --purple: #7c4dff;
+  --purple-2: #9f67ff;
+  --blue: #5e78ff;
+  --green: #39d98a;
+  --amber: #ffb648;
+  --red: #ff6b81;
+  --shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  margin: 0;
+  min-height: 100vh;
+}
+
+body {
+  font-family: "Inter", system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: var(--text);
+  background:
+    radial-gradient(circle at top left, rgba(124, 77, 255, 0.16), transparent 28%),
+    radial-gradient(circle at top right, rgba(94, 120, 255, 0.12), transparent 30%),
+    linear-gradient(180deg, #090c18 0%, #0c1020 100%);
+  background-attachment: fixed;
+}
+
+/* 自定义滚动条 */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.16); }
+
+/* 输入框 placeholder */
+.input::placeholder,
+input::placeholder { color: #6d7698; }
+
+/* Select 下拉箭头样式修正 */
+select.select,
+.select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2398a1c0' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  padding-right: 36px;
+}
+
+select.select option {
+  background: #141a31;
+  color: var(--text);
+}
+
+/* 按钮悬浮细节 */
+.primary-btn {
+  transition: transform 150ms ease, box-shadow 150ms ease;
+}
+.primary-btn:hover {
+  transform: translateY(-1px);
+}
+
+/* 进度动画 */
+@keyframes shine {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}

@@ -1,0 +1,7 @@
+{
+  "_comment": "复制此文件为 config.json 并填写你自己的 API Key，或在 Web UI 的「API 管理」页面直接配置（推荐）。",
+  "provider": "gemini",
+  "apiKey": "",
+  "model": "gemini-2.5-flash",
+  "baseURL": ""
+}
